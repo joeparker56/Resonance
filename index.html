@@ -64,6 +64,7 @@ h2{font-size:12px;color:var(--mute);font-weight:500;margin:0 0 12px}
 .list{flex:1;overflow:auto}
 .grp{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;height:36px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);color:var(--fg);font-weight:500}
 .grp .gc{color:var(--mute);font-weight:400}
+.grp .grp-act{margin-left:auto}
 .ic{width:16px;height:16px;flex:none}
 .ic.ok{color:var(--ok)} .ic.bad{color:var(--bad)}
 .row{display:grid;grid-template-columns:60px 16px minmax(0,1fr);align-items:center;gap:12px;height:44px;padding:0 16px;border-bottom:1px solid var(--line);cursor:pointer;content-visibility:auto;contain-intrinsic-size:auto 44px}
@@ -99,7 +100,9 @@ td{padding:8px 16px 8px 0;border-top:1px solid var(--line);color:var(--fg)}
 .verdict .sm{color:var(--ink2);margin-top:8px}
 .verdict .sm b{color:var(--fg);font-weight:600}
 .verdict .fix{margin-top:4px;color:var(--ink2)}
-.verdict .act{margin-top:16px}
+.verdict .act{margin-top:16px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.btn.ghost.del{color:var(--bad)}
+.btn.ghost.del:hover{border-color:var(--bad)}
 .reason{display:grid;grid-template-columns:48px 1fr;gap:16px;padding:16px 0;border-top:1px solid var(--line)}
 .code{font-size:16px;font-weight:600;line-height:1.5;color:var(--bad);font-variant-numeric:tabular-nums}
 .reason .t{font-weight:500;color:var(--fg)}
@@ -312,7 +315,7 @@ label select:focus{border-color:var(--accent);outline:0;box-shadow:0 0 0 3px col
 
 <dialog id="fixdlg">
   <form method="dialog" id="fixform">
-    <div class="dlg-head"><h3 id="fixtitle">Apply this fix?</h3><span class="tmute">Suggested by Claude Haiku. Nothing changes until you confirm.</span></div>
+    <div class="dlg-head"><h3 id="fixtitle">Apply this fix?</h3><span class="tmute" id="fixsub">Suggested by Claude Haiku. Nothing changes until you confirm.</span></div>
     <div class="fxbody" id="fixbody"></div>
     <div class="actions"><span class="grow"></span><button type="button" class="btn ghost" id="fixcancel">Cancel</button><button type="button" class="btn" id="fixok">Apply fix</button></div>
   </form>
@@ -572,6 +575,13 @@ Submit it anyway?`)) return;
   const v=visible(), i=v.findIndex(c=>c.id===id);   // claim may drop out of the current view
   renderList(); refreshFrom(i);
 }
+function submitAll(){   // every unsent, not-on-hold claim in the current "Likely accepted" list
+  const ids=visible().filter(c=>c.set!=='history'&&!SUB.has(c.id)&&!c.hold&&RES.get(c.id).status==='paid').map(c=>c.id);
+  if(!ids.length) return;
+  if(!confirm(`Submit ${ids.length} claim${ids.length===1?'':'s'} predicted to be accepted?`)) return;
+  ids.forEach(id=>SUB.add(id)); saveSub(); renderList(); refreshFrom(0);
+  toast(`${ids.length} claim${ids.length===1?'':'s'} submitted`);
+}
 function refreshFrom(i){
   const v=visible();
   if (!v.length){ $('details').innerHTML=''; $('pred').innerHTML=''; sel=null; return; }
@@ -598,7 +608,8 @@ function renderList(){
   const groups=[['denied','Likely rejected'],['paid','Likely accepted']];
   $('list').innerHTML = rows.length ? groups.map(([st,label])=>{
     const g=rows.filter(c=>RES.get(c.id).status===st);
-    return g.length ? `<div class="grp">${st==='paid'?ICON.ok:ICON.bad}<span>${label}</span><span class="gc">${g.length}</span></div>`+g.map(caseRow).join('') : '';
+    const ready=st==='paid'?g.filter(c=>c.set!=='history'&&!SUB.has(c.id)&&!c.hold).length:0;   // claims "Submit all" would send
+    return g.length ? `<div class="grp">${st==='paid'?ICON.ok:ICON.bad}<span>${label}</span><span class="gc">${g.length}</span>${ready?`<button type="button" class="mini grp-act" data-submit-all="1">Submit all (${ready})</button>`:''}</div>`+g.map(caseRow).join('') : '';
   }).join('') : '<div class="empty">No claims</div>';
 }
 function select(id){
@@ -633,7 +644,7 @@ function renderPred(c,r){
   let h=`<h2>Predicted outcome</h2>
   <div class="verdict ${ok?'ok':'bad'}"><div class="big">${ok?'Likely accepted':'Likely rejected'}</div>
     <div class="sm">${ok?'No payer rule is broken.':`${esc(CODE[r.code])} (${r.code})`}</div>${appliedHTML(c)}${ok||c.set==='history'?'':'<div class="fix" id="fixbox"></div>'}
-    ${c.set!=='history'?`<div class="act">${SUB.has(c.id)?'<span class="done">Submitted ✓</span>':`<button class="btn${ok?'':' ghost'}" data-submit="${c.id}">Submit claim</button>`}</div>`:''}</div>`;
+    ${c.set!=='history'?`<div class="act">${SUB.has(c.id)?'<span class="done">Submitted ✓</span>':`<button class="btn${ok?'':' ghost'}" data-submit="${c.id}">Submit claim</button><button type="button" class="btn ghost del" data-delete="${c.id}">Delete claim</button>`}</div>`:''}</div>`;
   if(!ok){
     h+='<h2>Reason codes</h2>'+r.fired.map((x,i)=>`<div class="reason"><div class="code">${x.code}</div><div><div class="t">${esc(CODE[x.code])}${i===0?'<span class="badge rep">reported</span>':''}</div><div class="d">${esc(x.detail)}</div><div class="src">Rule book: ${refLinks(x.src)}</div></div></div>`).join('');
     if(r.fired.length>1) h+='<div class="note">Several rules are broken; a payer reports only one code.</div>';
@@ -648,7 +659,7 @@ function renderPred(c,r){
 }
 
 /* list interaction */
-document.addEventListener('click',e=>{const b=e.target.closest('[data-submit]'); if(b){e.stopPropagation(); submitClaim(b.dataset.submit);}},true);
+document.addEventListener('click',e=>{ if(e.target.closest('[data-submit-all]')){ submitAll(); return; } const b=e.target.closest('[data-submit]'); if(b){e.stopPropagation(); submitClaim(b.dataset.submit);}},true);
 $('list').onclick=e=>{ if(e.target.closest('[data-submit]')) return; const r=e.target.closest('.row'); if(r) select(r.dataset.id);};
 const refresh=()=>{renderList(); const v=visible(); if(v.length&&!v.some(c=>c.id===sel)) select(v[0].id); else if(sel) select(sel);};
 $('q').oninput=refresh; $('scope').onchange=refresh; $('agency').onchange=refresh;
@@ -912,10 +923,21 @@ let PENDING=null;
 function openFix(id){
   const c=claims.find(x=>x.id===id), st=FIXSTATE.get(id); if(!c||!st||!st.v.ok||st.v.none) return;
   PENDING={id,v:st.v,label:(st.data.button_label||'').trim().slice(0,32)||'Apply fix',summary:st.data.summary||''};
+  $('fixsub').textContent='Suggested by Claude Haiku. Nothing changes until you confirm.';
   $('fixtitle').textContent=st.v.danger?'Delete this claim?':'Apply this fix?';
   $('fixbody').innerHTML=`<div class="fxsum">${esc(PENDING.summary)}</div><table class="chg">${st.v.changes.map(([k,a,b])=>`<tr><td>${esc(k)} · ${esc(id)}</td><td>${a===''?'':esc(a)+' <span class="arrow">→</span>'}<span class="to">${esc(b)}</span></td></tr>`).join('')}</table>
     <p class="tmute" style="margin:0">${st.v.danger?'The claim is removed from your list. You can undo this straight afterwards.':'The claim is re-checked against the payer rules straight after.'}</p>`;
   const ok=$('fixok'); ok.textContent=st.v.danger?'Delete claim':'Apply fix'; ok.className='btn'+(st.v.danger?' danger':'');
+  $('fixdlg').showModal();
+}
+function confirmDelete(id){
+  const c=claims.find(x=>x.id===id); if(!c||c.set==='history'||SUB.has(id)) return;
+  PENDING={id,v:{type:'delete_claim',params:{},danger:true,changes:[['Claim',id,'Deleted']]},label:'Deleted claim',summary:`Delete claim ${id}?`};
+  $('fixsub').textContent='Nothing changes until you confirm.';
+  $('fixtitle').textContent='Delete this claim?';
+  $('fixbody').innerHTML=`<div class="fxsum">${esc(PENDING.summary)}</div><div class="tmute" style="margin-bottom:16px">${esc(SVC[c.service])} · ${esc(PAYER[c.payer])} · ${esc(c.patient)} · ${esc(c.dos)} · ${c.units} units</div>
+    <p class="tmute" style="margin:0">The claim is removed from your list. You can undo this straight afterwards.</p>`;
+  const ok=$('fixok'); ok.textContent='Delete claim'; ok.className='btn danger';
   $('fixdlg').showModal();
 }
 $('fixcancel').onclick=()=>$('fixdlg').close();
@@ -931,6 +953,7 @@ $('fixok').onclick=()=>{
 };
 document.addEventListener('click',e=>{
   const a=e.target.closest('[data-fix-apply]'); if(a){ openFix(a.dataset.fixApply); return; }
+  const dl=e.target.closest('[data-delete]'); if(dl){ confirmDelete(dl.dataset.delete); return; }
   if(e.target.closest('[data-fix-retry]')){ FIX_CACHE.delete(FIXKEY); const c=claims.find(x=>x.id===sel); if(c) loadFix(c,RES.get(c.id)); return; }
   const u=e.target.closest('[data-undo]'); if(u){ $('toast').hidden=true; undoFix(u.dataset.undo); }
 });
